@@ -1,0 +1,698 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Firebase Learning App - Authentication & Admin Panel</title>
+    
+    <!-- Tailwind CSS CDN for styling -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Firebase v11+ Modular SDK CDN -->
+    <script type="module">
+        // Import Firebase modules from CDN
+        import { initializeApp } from 'https://www.gstatic.com/firebasejs/11.0.1/firebase-app.js';
+        import { 
+            getAuth, 
+            createUserWithEmailAndPassword, 
+            signInWithEmailAndPassword, 
+            signOut, 
+            onAuthStateChanged 
+        } from 'https://www.gstatic.com/firebasejs/11.0.1/firebase-auth.js';
+        import { 
+            getFirestore, 
+            doc, 
+            setDoc, 
+            getDoc, 
+            collection, 
+            onSnapshot, 
+            updateDoc,
+            query,
+            orderBy,
+            getDocs
+        } from 'https://www.gstatic.com/firebasejs/11.0.1/firebase-firestore.js';
+        // ============================================
+        // FIREBASE CONFIGURATION - REPLACE WITH YOUR OWN
+        // ============================================
+        // To get these values:
+        // 1. Go to https://console.firebase.google.com/
+        // 2. Create a new project or select existing one
+        // 3. Go to Project Settings > General
+        // 4. Scroll down to "Your apps" and create a web app
+        // 5. Copy the configuration object
+        
+        const firebaseConfig = {
+            apiKey: "AIzaSyDdPzWgCcpQeb2tP16kaHLxH38_F7EANFU",
+            authDomain: "nasimstore20-5bd7c.firebaseapp.com",
+            projectId: "nasimstore20-5bd7c",
+            storageBucket: "nasimstore20-5bd7c.firebasestorage.app",
+            messagingSenderId: "990327087244",
+            appId: "1:990327087244:web:6ce012045d2ea701ba1ba9",
+            measurementId: "G-7F5630V59P"
+        };
+
+
+        // Initialize Firebase app with the configuration
+        const app = initializeApp(firebaseConfig);
+        
+        // Get Firebase services we'll use
+        const auth = getAuth(app);  // Authentication service
+        const db = getFirestore(app);  // Database service
+
+        // ============================================
+        // GLOBAL VARIABLES
+        // ============================================
+        let currentUser = null;  // Stores the currently logged-in user
+        let currentUserData = null;  // Stores additional user data from Firestore
+        let usersListener = null;  // Stores the Firestore listener for admin panel
+
+        // ============================================
+        // AUTHENTICATION FUNCTIONS
+        // ============================================
+        
+        /**
+         * Sign up a new user with email and password
+         * The first user to sign up becomes an admin
+         */
+        window.signUp = async () => {
+            // Get values from the signup form
+            const email = document.getElementById('signupEmail').value;
+            const password = document.getElementById('signupPassword').value;
+            const statusDiv = document.getElementById('authStatus');
+            
+            try {
+                // Check if this will be the first user (admin)
+                // Query the users collection to see if it's empty
+                const usersQuery = query(collection(db, 'users'), orderBy('createdAt'));
+                const usersSnapshot = await getDocs(usersQuery);
+                const isFirstUser = usersSnapshot.empty;
+                
+                // Create the user account with Firebase Authentication
+                const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+                const user = userCredential.user;
+                
+                // Determine the role: first user is admin, others are regular users
+                const role = isFirstUser ? 'admin' : 'user';
+                
+                // Create a user document in Firestore with additional information
+                await setDoc(doc(db, 'users', user.uid), {
+                    email: user.email,
+                    uid: user.uid,
+                    role: role,
+                    location: null,  // Will be set when user shares location
+                    phone: null,  // Will be set when user adds phone
+                    isPhoneVerified: false,  // Will be true after phone verification
+                    createdAt: new Date().toISOString()
+                });
+                
+                // Show success message
+                statusDiv.innerHTML = `
+                    <div class="bg-green-100 border border-green-400 text-green-700 px-4 py-3 rounded">
+                        Account created successfully! ${isFirstUser ? 'You are the ADMIN!' : 'Welcome!'}
+                    </div>
+                `;
+                
+                // Clear the form
+                document.getElementById('signupEmail').value = '';
+                document.getElementById('signupPassword').value = '';
+                
+            } catch (error) {
+                // Show error message if signup fails
+                statusDiv.innerHTML = `
+                    <div class="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded">
+                        Error: ${error.message}
+                    </div>
+                `;
+            }
+        };
+        
+        /**
+         * Sign in an existing user with email and password
+         */
+        window.signIn = async () => {
+            // Get values from the login form
+            const email = document.getElementById('loginEmail').value;
+            const password = document.getElementById('loginPassword').value;
+            const statusDiv = document.getElementById('authStatus');
+            
+            try {
+                // Sign in the user with Firebase Authentication
+                const userCredential = await signInWithEmailAndPassword(auth, email, password);
+                
+                // Show success message
+                statusDiv.innerHTML = `
+                    <div class="bg-green-100 border border-green-400 text-green-700 px-4 py-3 rounded">
+                        Logged in successfully!
+                    </div>
+                `;
+                
+                // Clear the form
+                document.getElementById('loginEmail').value = '';
+                document.getElementById('loginPassword').value = '';
+                
+            } catch (error) {
+                // Show error message if login fails
+                statusDiv.innerHTML = `
+                    <div class="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded">
+                        Error: ${error.message}
+                    </div>
+                `;
+            }
+        };
+        
+        /**
+         * Sign out the current user
+         */
+        window.logout = async () => {
+            try {
+                await signOut(auth);
+                // Clean up any listeners when logging out
+                if (usersListener) {
+                    usersListener();
+                    usersListener = null;
+                }
+            } catch (error) {
+                console.error('Logout error:', error);
+            }
+        };
+
+        // ============================================
+        // USER PROFILE FUNCTIONS
+        // ============================================
+        
+        /**
+         * Request and save user's location using browser Geolocation API
+         */
+        window.shareLocation = async () => {
+            const statusDiv = document.getElementById('locationStatus');
+            
+            // Check if browser supports geolocation
+            if (!navigator.geolocation) {
+                statusDiv.innerHTML = `
+                    <div class="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mt-2">
+                        Geolocation is not supported by your browser
+                    </div>
+                `;
+                return;
+            }
+            
+            // Request current position from the browser
+            navigator.geolocation.getCurrentPosition(
+                async (position) => {
+                    // Success callback - we got the location
+                    const latitude = position.coords.latitude;
+                    const longitude = position.coords.longitude;
+                    
+                    try {
+                        // Update the user's document in Firestore with the location
+                        await updateDoc(doc(db, 'users', currentUser.uid), {
+                            location: {
+                                latitude: latitude,
+                                longitude: longitude,
+                                updatedAt: new Date().toISOString()
+                            }
+                        });
+                        
+                        statusDiv.innerHTML = `
+                            <div class="bg-green-100 border border-green-400 text-green-700 px-4 py-3 rounded mt-2">
+                                Location saved! (${latitude.toFixed(4)}, ${longitude.toFixed(4)})
+                            </div>
+                        `;
+                    } catch (error) {
+                        statusDiv.innerHTML = `
+                            <div class="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mt-2">
+                                Error saving location: ${error.message}
+                            </div>
+                        `;
+                    }
+                },
+                (error) => {
+                    // Error callback - location access denied or error
+                    statusDiv.innerHTML = `
+                        <div class="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mt-2">
+                            Error: ${error.message}
+                        </div>
+                    `;
+                }
+            );
+        };
+        
+        /**
+         * Simulate sending a phone verification code
+         * In a real app, this would send an SMS
+         */
+        window.sendVerificationCode = async () => {
+            const phone = document.getElementById('phoneNumber').value;
+            const statusDiv = document.getElementById('phoneStatus');
+            
+            if (!phone) {
+                statusDiv.innerHTML = `
+                    <div class="bg-yellow-100 border border-yellow-400 text-yellow-700 px-4 py-3 rounded mt-2">
+                        Please enter a phone number
+                    </div>
+                `;
+                return;
+            }
+            
+            try {
+                // Save the phone number to Firestore
+                await updateDoc(doc(db, 'users', currentUser.uid), {
+                    phone: phone
+                });
+                
+                // Show the verification code input field
+                document.getElementById('verificationSection').classList.remove('hidden');
+                
+                // Simulate sending SMS (in real app, this would call an SMS API)
+                statusDiv.innerHTML = `
+                    <div class="bg-blue-100 border border-blue-400 text-blue-700 px-4 py-3 rounded mt-2">
+                        Verification code sent to ${phone}! 
+                        <br><strong>Hint: The code is 123456</strong> (this is just a simulation)
+                    </div>
+                `;
+            } catch (error) {
+                statusDiv.innerHTML = `
+                    <div class="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mt-2">
+                        Error: ${error.message}
+                    </div>
+                `;
+            }
+        };
+        
+        /**
+         * Verify the phone verification code
+         * In this simulation, we check if the code is "123456"
+         */
+        window.verifyCode = async () => {
+            const code = document.getElementById('verificationCode').value;
+            const statusDiv = document.getElementById('phoneStatus');
+            
+            // Check if the code matches our simulated code
+            if (code === '123456') {
+                try {
+                    // Update the user's verification status in Firestore
+                    await updateDoc(doc(db, 'users', currentUser.uid), {
+                        isPhoneVerified: true
+                    });
+                    
+                    statusDiv.innerHTML = `
+                        <div class="bg-green-100 border border-green-400 text-green-700 px-4 py-3 rounded mt-2">
+                            Phone number verified successfully! ✓
+                        </div>
+                    `;
+                    
+                    // Hide the verification section
+                    document.getElementById('verificationSection').classList.add('hidden');
+                    
+                    // Update the displayed verification status
+                    loadUserData();
+                } catch (error) {
+                    statusDiv.innerHTML = `
+                        <div class="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mt-2">
+                            Error verifying phone: ${error.message}
+                        </div>
+                    `;
+                }
+            } else {
+                statusDiv.innerHTML = `
+                    <div class="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mt-2">
+                        Invalid verification code. Hint: try 123456
+                    </div>
+                `;
+            }
+        };
+
+        // ============================================
+        // ADMIN FUNCTIONS
+        // ============================================
+        
+        /**
+         * Load all users and display them in the admin panel
+         * This uses Firestore's real-time listener for live updates
+         */
+        function loadUsersForAdmin() {
+            // Only load if user is an admin
+            if (currentUserData?.role !== 'admin') return;
+            
+            const usersList = document.getElementById('usersList');
+            
+            // Set up a real-time listener for the users collection
+            // This will automatically update when any user data changes
+            usersListener = onSnapshot(collection(db, 'users'), (snapshot) => {
+                let html = '';
+                
+                // Loop through each user document
+                snapshot.forEach((doc) => {
+                    const userData = doc.data();
+                    
+                    // Create HTML for each user's information
+                    html += `
+                        <div class="border rounded p-4 mb-4 ${userData.role === 'admin' ? 'bg-purple-50' : 'bg-white'}">
+                            <div class="grid grid-cols-2 gap-2">
+                                <div>
+                                    <span class="font-semibold">Email:</span> ${userData.email}
+                                    ${userData.role === 'admin' ? '<span class="ml-2 bg-purple-600 text-white px-2 py-1 rounded text-xs">ADMIN</span>' : ''}
+                                </div>
+                                <div>
+                                    <span class="font-semibold">Phone:</span> 
+                                    ${userData.phone || 'Not provided'}
+                                    ${userData.isPhoneVerified ? '<span class="ml-2 text-green-600">✓ Verified</span>' : '<span class="ml-2 text-gray-400">Not verified</span>'}
+                                </div>
+                                <div class="col-span-2">
+                                    <span class="font-semibold">Location:</span> 
+                                    ${userData.location ? 
+                                        `Lat: ${userData.location.latitude.toFixed(4)}, Lng: ${userData.location.longitude.toFixed(4)}` : 
+                                        'Not shared'}
+                                </div>
+                                <div class="col-span-2 text-sm text-gray-500">
+                                    <span class="font-semibold">User ID:</span> ${userData.uid}
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                });
+                
+                // Update the users list in the DOM
+                usersList.innerHTML = html || '<p class="text-gray-500">No users registered yet.</p>';
+            });
+        }
+        
+        /**
+         * Send a simulated push notification to all users
+         * In a real app, this would use Firebase Cloud Messaging or similar
+         */
+        window.sendNotification = () => {
+            const message = document.getElementById('notificationMessage').value;
+            
+            if (!message) {
+                alert('Please enter a notification message');
+                return;
+            }
+            
+            // Create a notification element that will appear on the screen
+            const notification = document.createElement('div');
+            notification.className = 'fixed top-4 right-4 bg-indigo-600 text-white p-4 rounded-lg shadow-lg max-w-sm z-50 animate-pulse';
+            notification.innerHTML = `
+                <div class="flex items-start">
+                    <div class="flex-1">
+                        <p class="font-semibold">📢 Admin Notification</p>
+                        <p class="mt-1">${message}</p>
+                    </div>
+                    <button onclick="this.parentElement.parentElement.remove()" class="ml-4 text-white hover:text-gray-200">✕</button>
+                </div>
+            `;
+            
+            // Add the notification to the page
+            document.body.appendChild(notification);
+            
+            // Remove the notification after 5 seconds
+            setTimeout(() => {
+                if (notification.parentNode) {
+                    notification.remove();
+                }
+            }, 5000);
+            
+            // Clear the message input
+            document.getElementById('notificationMessage').value = '';
+            
+            // Show success feedback
+            const statusDiv = document.getElementById('notificationStatus');
+            statusDiv.innerHTML = `
+                <div class="bg-green-100 border border-green-400 text-green-700 px-4 py-3 rounded mt-2">
+                    Notification sent to all active users!
+                </div>
+            `;
+            
+            setTimeout(() => {
+                statusDiv.innerHTML = '';
+            }, 3000);
+        };
+
+        // ============================================
+        // UI UPDATE FUNCTIONS
+        // ============================================
+        
+        /**
+         * Load and display the current user's data from Firestore
+         */
+        async function loadUserData() {
+            if (!currentUser) return;
+            
+            try {
+                // Get the user's document from Firestore
+                const userDoc = await getDoc(doc(db, 'users', currentUser.uid));
+                
+                if (userDoc.exists()) {
+                    currentUserData = userDoc.data();
+                    
+                    // Update the UI with user information
+                    document.getElementById('userEmail').textContent = currentUserData.email;
+                    document.getElementById('userRole').textContent = currentUserData.role.toUpperCase();
+                    document.getElementById('verificationStatus').textContent = 
+                        currentUserData.isPhoneVerified ? 'Verified ✓' : 'Not Verified';
+                    
+                    // Show/hide admin panel based on role
+                    if (currentUserData.role === 'admin') {
+                        document.getElementById('adminPanel').classList.remove('hidden');
+                        loadUsersForAdmin();
+                    } else {
+                        document.getElementById('adminPanel').classList.add('hidden');
+                    }
+                    
+                    // Pre-fill phone number if it exists
+                    if (currentUserData.phone) {
+                        document.getElementById('phoneNumber').value = currentUserData.phone;
+                    }
+                }
+            } catch (error) {
+                console.error('Error loading user data:', error);
+            }
+        }
+        
+        /**
+         * Update the UI based on authentication state
+         * This function is called whenever the auth state changes
+         */
+        function updateUI(user) {
+            const authSection = document.getElementById('authSection');
+            const dashboardSection = document.getElementById('dashboardSection');
+            const adminPanel = document.getElementById('adminPanel');
+            
+            if (user) {
+                // User is signed in
+                currentUser = user;
+                authSection.classList.add('hidden');
+                dashboardSection.classList.remove('hidden');
+                loadUserData();
+            } else {
+                // User is signed out
+                currentUser = null;
+                currentUserData = null;
+                authSection.classList.remove('hidden');
+                dashboardSection.classList.add('hidden');
+                adminPanel.classList.add('hidden');
+                
+                // Clean up any active listeners
+                if (usersListener) {
+                    usersListener();
+                    usersListener = null;
+                }
+            }
+        }
+
+        // ============================================
+        // INITIALIZE APP
+        // ============================================
+        
+        // Listen for authentication state changes
+        // This fires when user signs in, signs out, or on page reload
+        onAuthStateChanged(auth, (user) => {
+            updateUI(user);
+        });
+        
+        // Log Firebase initialization status
+        console.log('Firebase app initialized successfully!');
+        console.log('Remember to replace the Firebase configuration with your own project settings.');
+    </script>
+</head>
+<body class="bg-gray-100 min-h-screen">
+    <div class="container mx-auto px-4 py-8 max-w-6xl">
+        <!-- Header -->
+        <header class="bg-white rounded-lg shadow-md p-6 mb-8">
+            <h1 class="text-3xl font-bold text-gray-800 text-center">🔥 Firebase Learning App</h1>
+            <p class="text-center text-gray-600 mt-2">Authentication, Firestore & Admin Panel Demo</p>
+        </header>
+
+        <!-- Authentication Section (shown when logged out) -->
+        <div id="authSection" class="bg-white rounded-lg shadow-md p-6 mb-8">
+            <h2 class="text-2xl font-semibold mb-6 text-gray-800">Authentication</h2>
+            
+            <!-- Status messages -->
+            <div id="authStatus" class="mb-4"></div>
+            
+            <div class="grid md:grid-cols-2 gap-8">
+                <!-- Sign Up Form -->
+                <div class="border rounded-lg p-4 bg-blue-50">
+                    <h3 class="text-xl font-semibold mb-4 text-blue-800">Sign Up</h3>
+                    <div class="space-y-4">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Email</label>
+                            <input type="email" id="signupEmail" placeholder="your@email.com"
+                                class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Password</label>
+                            <input type="password" id="signupPassword" placeholder="Min 6 characters"
+                                class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
+                        </div>
+                        <button onclick="signUp()" 
+                            class="w-full bg-blue-600 text-white py-2 px-4 rounded-md hover:bg-blue-700 transition duration-200">
+                            Create Account
+                        </button>
+                        <p class="text-sm text-gray-600">💡 First user becomes admin!</p>
+                    </div>
+                </div>
+                
+                <!-- Login Form -->
+                <div class="border rounded-lg p-4 bg-green-50">
+                    <h3 class="text-xl font-semibold mb-4 text-green-800">Login</h3>
+                    <div class="space-y-4">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Email</label>
+                            <input type="email" id="loginEmail" placeholder="your@email.com"
+                                class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-green-500">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Password</label>
+                            <input type="password" id="loginPassword" placeholder="Your password"
+                                class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-green-500">
+                        </div>
+                        <button onclick="signIn()" 
+                            class="w-full bg-green-600 text-white py-2 px-4 rounded-md hover:bg-green-700 transition duration-200">
+                            Sign In
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Dashboard Section (shown when logged in) -->
+        <div id="dashboardSection" class="hidden">
+            <!-- User Dashboard -->
+            <div class="bg-white rounded-lg shadow-md p-6 mb-8">
+                <div class="flex justify-between items-center mb-6">
+                    <h2 class="text-2xl font-semibold text-gray-800">User Dashboard</h2>
+                    <button onclick="logout()" 
+                        class="bg-red-500 text-white px-4 py-2 rounded-md hover:bg-red-600 transition duration-200">
+                        Logout
+                    </button>
+                </div>
+                
+                <!-- User Info -->
+                <div class="bg-gray-50 rounded-lg p-4 mb-6">
+                    <div class="grid md:grid-cols-3 gap-4">
+                        <div>
+                            <span class="font-semibold text-gray-600">Email:</span>
+                            <p id="userEmail" class="text-gray-800">-</p>
+                        </div>
+                        <div>
+                            <span class="font-semibold text-gray-600">Role:</span>
+                            <p id="userRole" class="text-gray-800">-</p>
+                        </div>
+                        <div>
+                            <span class="font-semibold text-gray-600">Phone Status:</span>
+                            <p id="verificationStatus" class="text-gray-800">-</p>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="grid md:grid-cols-2 gap-6">
+                    <!-- Location Sharing -->
+                    <div class="border rounded-lg p-4">
+                        <h3 class="text-lg font-semibold mb-4 text-gray-700">📍 Location Sharing</h3>
+                        <button onclick="shareLocation()" 
+                            class="bg-blue-500 text-white px-4 py-2 rounded-md hover:bg-blue-600 transition duration-200 w-full">
+                            Share My Location
+                        </button>
+                        <div id="locationStatus"></div>
+                    </div>
+                    
+                    <!-- Phone Verification -->
+                    <div class="border rounded-lg p-4">
+                        <h3 class="text-lg font-semibold mb-4 text-gray-700">📱 Phone Verification</h3>
+                        <div class="space-y-3">
+                            <input type="tel" id="phoneNumber" placeholder="+1234567890"
+                                class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
+                            <button onclick="sendVerificationCode()" 
+                                class="bg-green-500 text-white px-4 py-2 rounded-md hover:bg-green-600 transition duration-200 w-full">
+                                Send Verification Code
+                            </button>
+                            
+                            <!-- Verification Code Input (hidden initially) -->
+                            <div id="verificationSection" class="hidden space-y-3 mt-4">
+                                <input type="text" id="verificationCode" placeholder="Enter code (hint: 123456)"
+                                    class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
+                                <button onclick="verifyCode()" 
+                                    class="bg-purple-500 text-white px-4 py-2 rounded-md hover:bg-purple-600 transition duration-200 w-full">
+                                    Verify Code
+                                </button>
+                            </div>
+                        </div>
+                        <div id="phoneStatus"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Admin Panel (shown only for admin users) -->
+            <div id="adminPanel" class="hidden">
+                <div class="bg-purple-100 border-2 border-purple-300 rounded-lg shadow-md p-6 mb-8">
+                    <h2 class="text-2xl font-bold text-purple-800 mb-6">👑 Admin Panel</h2>
+                    
+                    <!-- Send Notification -->
+                    <div class="bg-white rounded-lg p-4 mb-6">
+                        <h3 class="text-lg font-semibold mb-4 text-gray-700">📢 Send Notification to All Users</h3>
+                        <div class="space-y-3">
+                            <textarea id="notificationMessage" 
+                                placeholder="Enter notification message..."
+                                rows="3"
+                                class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"></textarea>
+                            <button onclick="sendNotification()" 
+                                class="bg-purple-600 text-white px-4 py-2 rounded-md hover:bg-purple-700 transition duration-200 w-full">
+                                Send Notification
+                            </button>
+                        </div>
+                        <div id="notificationStatus"></div>
+                    </div>
+                    
+                    <!-- Users List -->
+                    <div class="bg-white rounded-lg p-4">
+                        <h3 class="text-lg font-semibold mb-4 text-gray-700">👥 Registered Users (Real-time)</h3>
+                        <div id="usersList" class="space-y-2">
+                            <p class="text-gray-500">Loading users...</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Instructions Section -->
+        <div class="bg-yellow-50 border-2 border-yellow-300 rounded-lg shadow-md p-6">
+            <h2 class="text-xl font-bold text-yellow-800 mb-4">📚 Setup Instructions</h2>
+            <ol class="list-decimal list-inside space-y-2 text-gray-700">
+                <li><strong>Create a Firebase Project:</strong> Go to <a href="https://console.firebase.google.com/" target="_blank" class="text-blue-600 hover:underline">Firebase Console</a></li>
+                <li><strong>Enable Authentication:</strong> Go to Authentication > Sign-in method > Enable Email/Password</li>
+                <li><strong>Enable Firestore:</strong> Go to Firestore Database > Create database > Start in test mode</li>
+                <li><strong>Get Configuration:</strong> Project Settings > General > Your apps > Web app > Copy config</li>
+                <li><strong>Replace Configuration:</strong> Replace the firebaseConfig object in this file with your own</li>
+                <li><strong>Test:</strong> The first user to sign up becomes the admin!</li>
+            </ol>
+            <div class="mt-4 p-3 bg-blue-100 rounded">
+                <p class="text-sm text-blue-800">
+                    <strong>Note:</strong> This is a learning demo. In production, implement proper security rules, 
+                    real phone verification (Firebase Phone Auth), and secure admin role assignment.
+                </p>
+            </div>
+        </div>
+    </div>
+</body>
+  </html>
