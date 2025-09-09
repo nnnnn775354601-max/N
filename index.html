@@ -3,379 +3,350 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>تطبيق تجريبي - Firebase</title>
+    <title>نظام إدارة المستخدمين - Firebase</title>
     
+    <!-- Tailwind CSS CDN -->
     <script src="https://cdn.tailwindcss.com"></script>
     
-    <script type="module">
-        // Import Firebase modules from CDN
-        import { initializeApp } from 'https://www.gstatic.com/firebasejs/11.0.1/firebase-app.js';
-        import { 
-            getAuth, 
-            createUserWithEmailAndPassword, 
-            signInWithEmailAndPassword, 
-            signOut, 
-            onAuthStateChanged,
-            RecaptchaVerifier,
-            signInWithPhoneNumber
-        } from 'https://www.gstatic.com/firebasejs/11.0.1/firebase-auth.js';
-        import { 
-            getFirestore, 
-            doc, 
-            setDoc, 
-            getDoc, 
-            collection, 
-            onSnapshot, 
-            updateDoc,
-            query,
-            orderBy,
-            getDocs
-        } from 'https://www.gstatic.com/firebasejs/11.0.1/firebase-firestore.js';
-        
-        // ============================================
-        // FIREBASE CONFIGURATION - استبدلها ببياناتك
-        // ============================================
-        const firebaseConfig = {
-            apiKey: "AIzaSyDdPzWgCcpQeb2tP16kaHLxH38_F7EANFU",
-            authDomain: "nasimstore20-5bd7c.firebaseapp.com",
-            projectId: "nasimstore20-5bd7c",
-            storageBucket: "nasimstore20-5bd7c.firebasestorage.app",
-            messagingSenderId: "990327087244",
-            appId: "1:990327087244:web:6ce012045d2ea701ba1ba9",
-            measurementId: "G-7F5630V59P"
-        };
+    <!-- Custom Google Font -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800&display=swap" rel="stylesheet">
+    
+    <!-- Font Awesome for Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 
-        // Initialize Firebase app
-        const app = initializeApp(firebaseConfig);
-        const auth = getAuth(app);
-        const db = getFirestore(app);
-
-        // ============================================
-        // GLOBAL VARIABLES
-        // ============================================
-        let currentUser = null;
-        let currentUserData = null;
-        let usersListener = null;
-        window.confirmationResult = null;
-        window.recaptchaVerifier = null;
-
-        // ============================================
-        // PAGE LOAD INITIALIZATION
-        // ============================================
-        window.onload = function() {
-            try {
-                window.recaptchaVerifier = new RecaptchaVerifier(auth, 'recaptcha-container', {
-                    'size': 'invisible',
-                    'callback': (response) => { console.log("reCAPTCHA verified."); }
-                });
-                console.log("reCAPTCHA Verifier initialized.");
-            } catch (error) {
-                console.error("Error initializing reCAPTCHA:", error);
-            }
-        };
-        
-        // ============================================
-        // AUTHENTICATION FUNCTIONS
-        // ============================================
-        window.signUp = async () => {
-            const email = document.getElementById('signupEmail').value;
-            const password = document.getElementById('signupPassword').value;
-            const statusDiv = document.getElementById('authStatus');
-            try {
-                const isFirstUser = (await getDocs(query(collection(db, 'users')))).empty;
-                const userCredential = await createUserWithEmailAndPassword(auth, email, password);
-                const user = userCredential.user;
-                const role = isFirstUser ? 'admin' : 'user';
-                await setDoc(doc(db, 'users', user.uid), {
-                    email: user.email, uid: user.uid, role: role, location: null,
-                    phone: null, isPhoneVerified: false, createdAt: new Date().toISOString()
-                });
-                statusDiv.innerHTML = `<div class="bg-green-100 border border-green-400 text-green-700 px-4 py-3 rounded">تم إنشاء الحساب بنجاح! ${isFirstUser ? 'أنت المدير!' : ''}</div>`;
-            } catch (error) {
-                statusDiv.innerHTML = `<div class="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded">خطأ: ${error.message}</div>`;
-            }
-        };
-        
-        window.signIn = async () => {
-            const email = document.getElementById('loginEmail').value;
-            const password = document.getElementById('loginPassword').value;
-            const statusDiv = document.getElementById('authStatus');
-            try {
-                await signInWithEmailAndPassword(auth, email, password);
-                statusDiv.innerHTML = `<div class="bg-green-100 border border-green-400 text-green-700 px-4 py-3 rounded">تم تسجيل الدخول بنجاح!</div>`;
-            } catch (error) {
-                statusDiv.innerHTML = `<div class="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded">خطأ: ${error.message}</div>`;
-            }
-        };
-
-        window.logout = async () => {
-            try {
-                await signOut(auth);
-                if (usersListener) {
-                    usersListener();
-                    usersListener = null;
-                }
-            } catch (error) {
-                console.error('Logout error:', error);
-            }
-        };
-
-        // ============================================
-        // USER PROFILE FUNCTIONS
-        // ============================================
-        window.shareLocation = async () => {
-            const statusDiv = document.getElementById('locationStatus');
-            if (!navigator.geolocation) {
-                statusDiv.innerHTML = `<div class="bg-red-100 ...">المتصفح لا يدعم تحديد الموقع</div>`;
-                return;
-            }
-            navigator.geolocation.getCurrentPosition(
-                async (position) => {
-                    const { latitude, longitude } = position.coords;
-                    try {
-                        await updateDoc(doc(db, 'users', currentUser.uid), {
-                            location: { latitude, longitude, updatedAt: new Date().toISOString() }
-                        });
-                        statusDiv.innerHTML = `<div class="bg-green-100 ...">تم حفظ الموقع!</div>`;
-                    } catch (error) {
-                        statusDiv.innerHTML = `<div class="bg-red-100 ...">خطأ في حفظ الموقع: ${error.message}</div>`;
-                    }
-                },
-                (error) => {
-                    statusDiv.innerHTML = `<div class="bg-red-100 ...">خطأ: ${error.message}</div>`;
-                }
-            );
-        };
-        
-        window.sendVerificationCode = async () => {
-            const countryCode = document.getElementById('countryCode').value;
-            const localPhoneNumber = document.getElementById('localPhoneNumber').value;
-            const phoneNumber = countryCode + localPhoneNumber;
-            
-            const statusDiv = document.getElementById('phoneStatus');
-            const appVerifier = window.recaptchaVerifier;
-
-            if (!localPhoneNumber) {
-                statusDiv.innerHTML = `<div class="bg-yellow-100 ...">الرجاء إدخال رقم الهاتف.</div>`;
-                return;
-            }
-
-            statusDiv.innerHTML = `<div class="bg-blue-100 ...">جاري إرسال رمز التحقق...</div>`;
-            
-            try {
-                const confirmationResult = await signInWithPhoneNumber(auth, phoneNumber, appVerifier);
-                window.confirmationResult = confirmationResult;
-                statusDiv.innerHTML = `<div class="bg-green-100 ...">تم إرسال رمز التحقق إلى ${phoneNumber}!</div>`;
-                document.getElementById('verificationSection').classList.remove('hidden');
-            } catch (error) {
-                statusDiv.innerHTML = `<div class="bg-red-100 ...">خطأ: ${error.message}</div>`;
-                if (window.recaptchaVerifier) {
-                    window.recaptchaVerifier.render().then(widgetId => grecaptcha.reset(widgetId));
-                }
-            }
-        };
-        
-        window.verifyCode = async () => {
-            const code = document.getElementById('verificationCode').value;
-            const statusDiv = document.getElementById('phoneStatus');
-            if (!code) {
-                 statusDiv.innerHTML = `<div class="bg-yellow-100 ...">الرجاء إدخال الرمز.</div>`;
-                 return;
-            }
-            if (!window.confirmationResult) {
-                 statusDiv.innerHTML = `<div class="bg-red-100 ...">خطأ: الرجاء طلب الرمز أولاً.</div>`;
-                 return;
-            }
-            
-            try {
-                const result = await window.confirmationResult.confirm(code);
-                await updateDoc(doc(db, 'users', currentUser.uid), {
-                    isPhoneVerified: true,
-                    phone: result.user.phoneNumber
-                });
-                statusDiv.innerHTML = `<div class="bg-green-100 ...">تم التحقق من الرقم! ✓</div>`;
-                document.getElementById('verificationSection').classList.add('hidden');
-                loadUserData();
-            } catch (error) {
-                statusDiv.innerHTML = `<div class="bg-red-100 ...">خطأ: الرمز غير صحيح.</div>`;
-            }
-        };
-
-        // ============================================
-        // ADMIN & UI FUNCTIONS
-        // ============================================
-        function loadUsersForAdmin() {
-            if (currentUserData?.role !== 'admin') return;
-            const usersList = document.getElementById('usersList');
-            usersListener = onSnapshot(collection(db, 'users'), (snapshot) => {
-                let html = '';
-                snapshot.forEach((doc) => {
-                    const userData = doc.data();
-                    html += `<div class="border rounded p-4 mb-4 ${userData.role === 'admin' ? 'bg-purple-50' : 'bg-white'}"><div class="grid grid-cols-2 gap-2"><div><span class="font-semibold">البريد:</span> ${userData.email} ${userData.role === 'admin' ? '<span class="ml-2 bg-purple-600 text-white px-2 py-1 rounded text-xs">مدير</span>' : ''}</div><div><span class="font-semibold">الهاتف:</span> ${userData.phone || 'لم يحدد'} ${userData.isPhoneVerified ? '<span class="ml-2 text-green-600">✓ موثق</span>' : '<span class="ml-2 text-gray-400">غير موثق</span>'}</div><div class="col-span-2"><span class="font-semibold">الموقع:</span> ${userData.location ? `Lat: ${userData.location.latitude.toFixed(4)}, Lng: ${userData.location.longitude.toFixed(4)}` : 'غير مشترك'}</div><div class="col-span-2 text-sm text-gray-500"><span class="font-semibold">معرف المستخدم:</span> ${userData.uid}</div></div></div>`;
-                });
-                usersList.innerHTML = html || '<p class="text-gray-500">لا يوجد مستخدمون مسجلون بعد.</p>';
-            });
+    <style>
+        body {
+            font-family: 'Tajawal', sans-serif;
         }
-        window.sendNotification = () => {
-            const message = document.getElementById('notificationMessage').value;
-            if (!message) { alert('الرجاء إدخال رسالة الإشعار'); return; }
-            const notification = document.createElement('div');
-            notification.className = 'fixed top-4 left-4 bg-indigo-600 text-white p-4 rounded-lg shadow-lg max-w-sm z-50 animate-pulse';
-            notification.innerHTML = `<div class="flex items-start"><div class="flex-1"><p class="font-semibold">📢 إشعار من المدير</p><p class="mt-1">${message}</p></div><button onclick="this.parentElement.parentElement.remove()" class="mr-4 text-white hover:text-gray-200">✕</button></div>`;
-            document.body.appendChild(notification);
-            setTimeout(() => { if (notification.parentNode) { notification.remove(); } }, 5000);
-            document.getElementById('notificationMessage').value = '';
-        };
-        async function loadUserData() {
-            if (!currentUser) return;
-            try {
-                const userDoc = await getDoc(doc(db, 'users', currentUser.uid));
-                if (userDoc.exists()) {
-                    currentUserData = userDoc.data();
-                    document.getElementById('userEmail').textContent = currentUserData.email;
-                    document.getElementById('userRole').textContent = currentUserData.role === 'admin' ? 'مدير' : 'مستخدم';
-                    document.getElementById('verificationStatus').textContent = currentUserData.isPhoneVerified ? 'موثق ✓' : 'غير موثق';
-                    if (currentUserData.role === 'admin') {
-                        document.getElementById('adminPanel').classList.remove('hidden');
-                        loadUsersForAdmin();
-                    } else {
-                        document.getElementById('adminPanel').classList.add('hidden');
-                    }
-                }
-            } catch (error) { console.error('Error loading user data:', error); }
+        
+        .phone-input-group {
+            display: flex;
+            gap: 0.5rem;
         }
-        function updateUI(user) {
-            const authSection = document.getElementById('authSection');
-            const dashboardSection = document.getElementById('dashboardSection');
-            if (user) {
-                currentUser = user;
-                authSection.classList.add('hidden');
-                dashboardSection.classList.remove('hidden');
-                loadUserData();
-            } else {
-                currentUser = null;
-                currentUserData = null;
-                authSection.classList.remove('hidden');
-                dashboardSection.classList.add('hidden');
-                if (usersListener) {
-                    usersListener();
-                    usersListener = null;
-                }
-            }
+        
+        .country-code-select {
+            flex: 0 0 110px;
         }
-
-        // ============================================
-        // INITIALIZE APP
-        // ============================================
-        onAuthStateChanged(auth, user => updateUI(user));
-        console.log('Firebase app initialized.');
-    </script>
+        
+        .otp-input {
+            width: 3rem;
+            height: 3rem;
+            text-align: center;
+            font-size: 1.5rem;
+            border: 2px solid #e5e7eb;
+            border-radius: 0.5rem;
+            transition: all 0.3s;
+        }
+        
+        .otp-input:focus {
+            border-color: #3b82f6;
+            outline: none;
+            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+        }
+        
+        .otp-input::-webkit-inner-spin-button,
+        .otp-input::-webkit-outer-spin-button {
+            -webkit-appearance: none;
+            margin: 0;
+        }
+        
+        .fade-in {
+            animation: fadeIn 0.5s ease-in;
+        }
+        
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        
+        .spinner {
+            border: 3px solid #f3f4f6;
+            border-top: 3px solid #3b82f6;
+            border-radius: 50%;
+            width: 24px;
+            height: 24px;
+            animation: spin 1s linear infinite;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
 </head>
-<body class="bg-gray-100 min-h-screen">
-    <div class="container mx-auto px-4 py-8 max-w-6xl">
-        <header class="bg-white rounded-lg shadow-md p-6 mb-8">
-            <h1 class="text-3xl font-bold text-gray-800 text-center">🔥 تطبيق تجريبي - Firebase</h1>
-            <p class="text-center text-gray-600 mt-2">توثيق، قاعدة بيانات ولوحة تحكم</p>
-        </header>
+<body class="bg-gradient-to-br from-blue-50 to-indigo-100 min-h-screen">
 
-        <div id="authSection" class="bg-white rounded-lg shadow-md p-6 mb-8">
-            <h2 class="text-2xl font-semibold mb-6 text-gray-800">التسجيل</h2>
-            <div id="authStatus" class="mb-4"></div>
-            <div class="grid md:grid-cols-2 gap-8">
-                <div class="border rounded-lg p-4 bg-blue-50">
-                    <h3 class="text-xl font-semibold mb-4 text-blue-800">إنشاء حساب جديد</h3>
-                    <div class="space-y-4">
-                        <div>
-                            <label class="block text-sm font-medium text-gray-700 mb-1">البريد الإلكتروني</label>
-                            <input type="email" id="signupEmail" placeholder="your@email.com" class="w-full px-3 py-2 border border-gray-300 rounded-md">
-                        </div>
-                        <div>
-                            <label class="block text-sm font-medium text-gray-700 mb-1">كلمة المرور</label>
-                            <input type="password" id="signupPassword" placeholder="6 أحرف على الأقل" class="w-full px-3 py-2 border border-gray-300 rounded-md">
-                        </div>
-                        <button onclick="signUp()" class="w-full bg-blue-600 text-white py-2 px-4 rounded-md hover:bg-blue-700">إنشاء حساب</button>
-                        <p class="text-sm text-gray-600">💡 أول مستخدم يصبح مديراً!</p>
-                    </div>
-                </div>
-                <div class="border rounded-lg p-4 bg-green-50">
-                    <h3 class="text-xl font-semibold mb-4 text-green-800">تسجيل الدخول</h3>
-                    <div class="space-y-4">
-                        <div>
-                            <label class="block text-sm font-medium text-gray-700 mb-1">البريد الإلكتروني</label>
-                            <input type="email" id="loginEmail" placeholder="your@email.com" class="w-full px-3 py-2 border border-gray-300 rounded-md">
-                        </div>
-                        <div>
-                            <label class="block text-sm font-medium text-gray-700 mb-1">كلمة المرور</label>
-                            <input type="password" id="loginPassword" placeholder="كلمة مرورك" class="w-full px-3 py-2 border border-gray-300 rounded-md">
-                        </div>
-                        <button onclick="signIn()" class="w-full bg-green-600 text-white py-2 px-4 rounded-md hover:bg-green-700">دخول</button>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <div id="dashboardSection" class="hidden">
-            <div class="bg-white rounded-lg shadow-md p-6 mb-8">
-                <div class="flex justify-between items-center mb-6">
-                    <h2 class="text-2xl font-semibold text-gray-800">لوحة التحكم</h2>
-                    <button onclick="logout()" class="bg-red-500 text-white px-4 py-2 rounded-md hover:bg-red-600">تسجيل الخروج</button>
-                </div>
-                <div class="bg-gray-50 rounded-lg p-4 mb-6">
-                    <div class="grid md:grid-cols-3 gap-4">
-                        <div><span class="font-semibold text-gray-600">البريد:</span><p id="userEmail">-</p></div>
-                        <div><span class="font-semibold text-gray-600">الدور:</span><p id="userRole">-</p></div>
-                        <div><span class="font-semibold text-gray-600">حالة الهاتف:</span><p id="verificationStatus">-</p></div>
-                    </div>
-                </div>
-                <div class="grid md:grid-cols-2 gap-6">
-                    <div class="border rounded-lg p-4">
-                        <h3 class="text-lg font-semibold mb-4 text-gray-700">📍 مشاركة الموقع</h3>
-                        <button onclick="shareLocation()" class="bg-blue-500 text-white px-4 py-2 rounded-md w-full">مشاركة موقعي</button>
-                        <div id="locationStatus"></div>
-                    </div>
-                    <div class="border rounded-lg p-4">
-                        <h3 class="text-lg font-semibold mb-4 text-gray-700">📱 التحقق من الهاتف</h3>
-                        <div class="space-y-3">
-                            <label class="block text-sm font-medium text-gray-700 mb-1">رقم الهاتف</label>
-                            <div class="flex">
-                                <select id="countryCode" class="border border-l-0 border-gray-300 rounded-r-md px-3 py-2 bg-gray-50 focus:outline-none">
-                                    <option value="+967" selected>🇾🇪 +967</option>
-                                    <option value="+966">🇸🇦 +966</option>
-                                    <option value="+971">🇦🇪 +971</option>
-                                    <option value="+1">🇺🇸 +1</option>
-                                    <option value="+20">🇪🇬 +20</option>
-                                </select>
-                                <input type="tel" id="localPhoneNumber" placeholder="774123456" class="w-full px-3 py-2 border border-gray-300 rounded-l-md focus:outline-none focus:ring-2 focus:ring-blue-500">
-                            </div>
-                            <button onclick="sendVerificationCode()" class="bg-green-500 text-white px-4 py-2 rounded-md w-full">إرسال رمز التحقق</button>
-                            <div id="recaptcha-container"></div>
-                            <div id="verificationSection" class="hidden space-y-3 mt-4">
-                                <input type="text" id="verificationCode" placeholder="أدخل الرمز من رسالة SMS" class="w-full px-3 py-2 border border-gray-300 rounded-md">
-                                <button onclick="verifyCode()" class="bg-purple-500 text-white px-4 py-2 rounded-md w-full">التحقق من الرمز</button>
-                            </div>
-                        </div>
-                        <div id="phoneStatus"></div>
-                    </div>
-                </div>
-            </div>
-
-            <div id="adminPanel" class="hidden">
-                <div class="bg-purple-100 border-2 border-purple-300 rounded-lg shadow-md p-6 mb-8">
-                    <h2 class="text-2xl font-bold text-purple-800 mb-6">👑 لوحة تحكم المدير</h2>
-                    <div class="bg-white rounded-lg p-4 mb-6">
-                        <h3 class="text-lg font-semibold mb-4 text-gray-700">📢 إرسال إشعار للجميع</h3>
-                        <div class="space-y-3">
-                            <textarea id="notificationMessage" placeholder="أدخل رسالة الإشعار..." rows="3" class="w-full px-3 py-2 border border-gray-300 rounded-md"></textarea>
-                            <button onclick="sendNotification()" class="bg-purple-600 text-white px-4 py-2 rounded-md w-full">إرسال إشعار</button>
-                        </div>
-                    </div>
-                    <div class="bg-white rounded-lg p-4">
-                        <h3 class="text-lg font-semibold mb-4 text-gray-700">👥 المستخدمون المسجلون (تحديث فوري)</h3>
-                        <div id="usersList" class="space-y-2"><p class="text-gray-500">جاري تحميل المستخدمين...</p></div>
-                    </div>
-                </div>
-            </div>
+    <!-- Loading Overlay -->
+    <div id="loading-overlay" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 hidden">
+        <div class="bg-white rounded-lg p-8 flex flex-col items-center">
+            <div class="spinner mb-4"></div>
+            <p class="text-gray-700">جاري المعالجة...</p>
         </div>
     </div>
+
+    <div class="container mx-auto p-4 md:p-8 max-w-6xl">
+        <!-- Header -->
+        <header class="text-center mb-8 fade-in">
+            <h1 class="text-4xl md:text-5xl font-bold text-gray-900 mb-2">
+                <i class="fas fa-shield-alt text-blue-600 ml-2"></i>
+                نظام إدارة المستخدمين
+            </h1>
+            <p class="text-gray-600 text-lg">نظام متكامل للمصادقة والتحكم في الصلاحيات باستخدام Firebase</p>
+        </header>
+
+        <!-- Step 1: Registration Form -->
+        <div id="registration-step" class="bg-white p-8 rounded-2xl shadow-xl fade-in">
+            <div class="max-w-2xl mx-auto">
+                <h2 class="text-3xl font-bold mb-6 text-center text-gray-800">
+                    <i class="fas fa-user-plus text-green-600 ml-2"></i>
+                    إنشاء حساب جديد
+                </h2>
+                
+                <form id="registration-form" class="space-y-6">
+                    <!-- Full Name -->
+                    <div>
+                        <label for="fullname" class="block text-gray-700 font-semibold mb-2">
+                            <i class="fas fa-user text-gray-500 ml-1"></i>
+                            الاسم الكامل
+                        </label>
+                        <input type="text" id="fullname" 
+                               class="w-full px-4 py-3 border-2 border-gray-200 rounded-lg focus:outline-none focus:border-blue-500 transition-colors"
+                               placeholder="أدخل اسمك الكامل" required>
+                    </div>
+
+                    <!-- Email -->
+                    <div>
+                        <label for="email" class="block text-gray-700 font-semibold mb-2">
+                            <i class="fas fa-envelope text-gray-500 ml-1"></i>
+                            البريد الإلكتروني
+                        </label>
+                        <input type="email" id="email" 
+                               class="w-full px-4 py-3 border-2 border-gray-200 rounded-lg focus:outline-none focus:border-blue-500 transition-colors"
+                               placeholder="example@email.com" required>
+                    </div>
+
+                    <!-- Password -->
+                    <div>
+                        <label for="password" class="block text-gray-700 font-semibold mb-2">
+                            <i class="fas fa-lock text-gray-500 ml-1"></i>
+                            كلمة المرور
+                        </label>
+                        <input type="password" id="password" 
+                               class="w-full px-4 py-3 border-2 border-gray-200 rounded-lg focus:outline-none focus:border-blue-500 transition-colors"
+                               placeholder="أدخل كلمة مرور قوية" required minlength="6">
+                    </div>
+
+                    <!-- Phone Number with Country Code -->
+                    <div>
+                        <label class="block text-gray-700 font-semibold mb-2">
+                            <i class="fas fa-phone text-gray-500 ml-1"></i>
+                            رقم الهاتف
+                        </label>
+                        <div class="phone-input-group">
+                            <select id="country-code" class="country-code-select px-3 py-3 border-2 border-gray-200 rounded-lg focus:outline-none focus:border-blue-500 transition-colors">
+                                <option value="+966">🇸🇦 +966</option>
+                                <option value="+971">🇦🇪 +971</option>
+                                <option value="+965">🇰🇼 +965</option>
+                                <option value="+968">🇴🇲 +968</option>
+                                <option value="+973">🇧🇭 +973</option>
+                                <option value="+974">🇶🇦 +974</option>
+                                <option value="+20">🇪🇬 +20</option>
+                                <option value="+962">🇯🇴 +962</option>
+                                <option value="+961">🇱🇧 +961</option>
+                                <option value="+963">🇸🇾 +963</option>
+                                <option value="+964">🇮🇶 +964</option>
+                                <option value="+970">🇵🇸 +970</option>
+                                <option value="+212">🇲🇦 +212</option>
+                                <option value="+213">🇩🇿 +213</option>
+                                <option value="+216">🇹🇳 +216</option>
+                                <option value="+218">🇱🇾 +218</option>
+                                <option value="+249">🇸🇩 +249</option>
+                                <option value="+1">🇺🇸 +1</option>
+                                <option value="+44">🇬🇧 +44</option>
+                                <option value="+33">🇫🇷 +33</option>
+                                <option value="+49">🇩🇪 +49</option>
+                                <option value="+90">🇹🇷 +90</option>
+                            </select>
+                            <input type="tel" id="phone-number" 
+                                   class="flex-1 px-4 py-3 border-2 border-gray-200 rounded-lg focus:outline-none focus:border-blue-500 transition-colors"
+                                   placeholder="512345678" required pattern="[0-9]{8,15}">
+                        </div>
+                    </div>
+
+                    <!-- reCAPTCHA Container -->
+                    <div id="recaptcha-container"></div>
+
+                    <!-- Submit Button -->
+                    <button type="submit" id="register-btn"
+                            class="w-full bg-gradient-to-l from-blue-600 to-blue-500 text-white py-3 rounded-lg font-semibold text-lg hover:from-blue-700 hover:to-blue-600 transition-all duration-300 transform hover:scale-[1.02] shadow-lg">
+                        <i class="fas fa-user-plus ml-2"></i>
+                        إنشاء الحساب والمتابعة
+                    </button>
+
+                    <!-- Login Link -->
+                    <p class="text-center text-gray-600 mt-4">
+                        لديك حساب بالفعل؟ 
+                        <button type="button" id="show-login" class="text-blue-600 hover:text-blue-700 font-semibold">
+                            تسجيل الدخول
+                        </button>
+                    </p>
+                </form>
+            </div>
+        </div>
+
+        <!-- Step 2: OTP Verification -->
+        <div id="otp-step" class="bg-white p-8 rounded-2xl shadow-xl hidden">
+            <div class="max-w-md mx-auto text-center">
+                <div class="mb-6">
+                    <div class="w-20 h-20 bg-blue-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                        <i class="fas fa-mobile-alt text-blue-600 text-3xl"></i>
+                    </div>
+                    <h2 class="text-3xl font-bold text-gray-800 mb-2">التحقق من رقم الهاتف</h2>
+                    <p class="text-gray-600">
+                        تم إرسال رمز التحقق إلى 
+                        <span id="phone-display" class="font-semibold text-blue-600"></span>
+                    </p>
+                </div>
+
+                <form id="otp-form" class="space-y-6">
+                    <div>
+                        <label class="block text-gray-700 font-semibold mb-3">أدخل رمز التحقق المكون من 6 أرقام</label>
+                        <div class="flex justify-center gap-2" id="otp-inputs">
+                            <input type="number" class="otp-input" maxlength="1" min="0" max="9" required>
+                            <input type="number" class="otp-input" maxlength="1" min="0" max="9" required>
+                            <input type="number" class="otp-input" maxlength="1" min="0" max="9" required>
+                            <input type="number" class="otp-input" maxlength="1" min="0" max="9" required>
+                            <input type="number" class="otp-input" maxlength="1" min="0" max="9" required>
+                            <input type="number" class="otp-input" maxlength="1" min="0" max="9" required>
+                        </div>
+                    </div>
+
+                    <button type="submit" id="verify-btn"
+                            class="w-full bg-gradient-to-l from-green-600 to-green-500 text-white py-3 rounded-lg font-semibold text-lg hover:from-green-700 hover:to-green-600 transition-all duration-300 shadow-lg">
+                        <i class="fas fa-check-circle ml-2"></i>
+                        التحقق من الرمز
+                    </button>
+
+                    <div class="text-gray-600">
+                        <p>لم تستلم الرمز؟</p>
+                        <button type="button" id="resend-otp" class="text-blue-600 hover:text-blue-700 font-semibold mt-2">
+                            إعادة إرسال الرمز
+                        </button>
+                        <p id="resend-timer" class="text-sm text-gray-500 mt-1"></p>
+                    </div>
+
+                    <button type="button" id="change-phone" class="text-gray-600 hover:text-gray-700 text-sm">
+                        <i class="fas fa-arrow-right ml-1"></i>
+                        تغيير رقم الهاتف
+                    </button>
+                </form>
+            </div>
+        </div>
+
+        <!-- Login Form -->
+        <div id="login-step" class="bg-white p-8 rounded-2xl shadow-xl hidden">
+            <div class="max-w-md mx-auto">
+                <h2 class="text-3xl font-bold mb-6 text-center text-gray-800">
+                    <i class="fas fa-sign-in-alt text-blue-600 ml-2"></i>
+                    تسجيل الدخول
+                </h2>
+                
+                <form id="login-form" class="space-y-6">
+                    <div>
+                        <label for="login-email" class="block text-gray-700 font-semibold mb-2">
+                            <i class="fas fa-envelope text-gray-500 ml-1"></i>
+                            البريد الإلكتروني
+                        </label>
+                        <input type="email" id="login-email" 
+                               class="w-full px-4 py-3 border-2 border-gray-200 rounded-lg focus:outline-none focus:border-blue-500 transition-colors"
+                               placeholder="example@email.com" required>
+                    </div>
+
+                    <div>
+                        <label for="login-password" class="block text-gray-700 font-semibold mb-2">
+                            <i class="fas fa-lock text-gray-500 ml-1"></i>
+                            كلمة المرور
+                        </label>
+                        <input type="password" id="login-password" 
+                               class="w-full px-4 py-3 border-2 border-gray-200 rounded-lg focus:outline-none focus:border-blue-500 transition-colors"
+                               placeholder="أدخل كلمة المرور" required>
+                    </div>
+
+                    <button type="submit"
+                            class="w-full bg-gradient-to-l from-blue-600 to-blue-500 text-white py-3 rounded-lg font-semibold text-lg hover:from-blue-700 hover:to-blue-600 transition-all duration-300 shadow-lg">
+                        <i class="fas fa-sign-in-alt ml-2"></i>
+                        تسجيل الدخول
+                    </button>
+
+                    <p class="text-center text-gray-600 mt-4">
+                        ليس لديك حساب؟ 
+                        <button type="button" id="show-register" class="text-blue-600 hover:text-blue-700 font-semibold">
+                            إنشاء حساب جديد
+                        </button>
+                    </p>
+                </form>
+            </div>
+        </div>
+
+        <!-- Dashboard (After Login) -->
+        <div id="dashboard" class="hidden">
+            <!-- User Info Card -->
+            <div class="bg-white p-6 rounded-2xl shadow-xl mb-8 fade-in">
+                <div class="flex justify-between items-center flex-wrap gap-4">
+                    <div>
+                        <h2 class="text-2xl font-bold text-gray-800 mb-2">
+                            مرحباً، <span id="user-name" class="text-blue-600"></span>
+                        </h2>
+                        <div class="space-y-1 text-gray-600">
+                            <p><i class="fas fa-envelope ml-1"></i> <span id="user-email"></span></p>
+                            <p><i class="fas fa-phone ml-1"></i> <span id="user-phone"></span></p>
+                            <p>
+                                <i class="fas fa-user-tag ml-1"></i>
+                                الصلاحية: <span id="user-role" class="font-semibold px-3 py-1 rounded-full text-sm"></span>
+                            </p>
+                        </div>
+                    </div>
+                    <button id="logout-btn" 
+                            class="bg-red-500 text-white px-6 py-3 rounded-lg hover:bg-red-600 transition-colors shadow-md">
+                        <i class="fas fa-sign-out-alt ml-2"></i>
+                        تسجيل الخروج
+                    </button>
+                </div>
+            </div>
+
+            <!-- Admin Panel -->
+            <div id="admin-panel" class="bg-white p-8 rounded-2xl shadow-xl hidden fade-in">
+                <h2 class="text-3xl font-bold mb-6 text-gray-800">
+                    <i class="fas fa-users-cog text-purple-600 ml-2"></i>
+                    لوحة التحكم - إدارة المستخدمين
+                </h2>
+                
+                <div class="overflow-x-auto">
+                    <table class="min-w-full bg-white">
+                        <thead class="bg-gray-100">
+                            <tr>
+                                <th class="text-right py-3 px-4 font-semibold text-sm text-gray-700">الاسم</th>
+                                <th class="text-right py-3 px-4 font-semibold text-sm text-gray-700">البريد الإلكتروني</th>
+                                <th class="text-right py-3 px-4 font-semibold text-sm text-gray-700">رقم الهاتف</th>
+                                <th class="text-right py-3 px-4 font-semibold text-sm text-gray-700">الصلاحية</th>
+                                <th class="text-right py-3 px-4 font-semibold text-sm text-gray-700">الإجراءات</th>
+                            </tr>
+                        </thead>
+                        <tbody id="users-table" class="text-gray-700">
+                            <!-- User rows will be dynamically inserted here -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- Messages -->
+        <div id="message" class="mt-6 text-center hidden"></div>
+    </div>
+
+    <!-- Firebase SDK and App Scripts -->
+    <script type="module" src="js/app.js"></script>
 </body>
 </html>
